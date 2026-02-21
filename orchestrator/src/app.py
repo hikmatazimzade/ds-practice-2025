@@ -1,11 +1,14 @@
 import sys
 import os
 
+from flask import render_template
+
 # This set of lines are needed to import the gRPC stubs.
 # The path of the stubs is relative to the current file, or absolute inside the container.
 # Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
-fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
+fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/'
+                                                               'fraud_detection'))
 sys.path.insert(0, fraud_detection_grpc_path)
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
@@ -14,12 +17,16 @@ import grpc
 
 def greet(name='you'):
     # Establish a connection with the fraud-detection gRPC service.
-    with grpc.insecure_channel('fraud_detection:50051') as channel:
-        # Create a stub object.
-        stub = fraud_detection_grpc.HelloServiceStub(channel)
-        # Call the service through the stub object.
-        response = stub.SayHello(fraud_detection.HelloRequest(name=name))
-    return response.greeting
+    return f"Greeting {name}"
+
+
+    # return "greeting"
+    # with grpc.insecure_channel('fraud_detection:50051') as channel:
+    #     # Create a stub object.
+    #     stub = fraud_detection_grpc.HelloServiceStub(channel)
+    #     # Call the service through the stub object.
+    #     response = stub.SayHello(fraud_detection.HelloRequest(name=name))
+    # return response.greeting
 
 # Import Flask.
 # Flask is a web framework for Python.
@@ -30,7 +37,7 @@ from flask_cors import CORS
 import json
 
 # Create a simple Flask app.
-app = Flask(__name__)
+app = Flask(__name__, template_folder="../../../frontend/src")
 # Enable CORS for the app.
 CORS(app, resources={r'/*': {'origins': '*'}})
 
@@ -52,18 +59,33 @@ def checkout():
     """
     # Get request object data to json
     request_data = json.loads(request.data)
-    # Print request object data
-    print("Request Data:", request_data.get('items'))
+    items = request_data.get("items", {})
 
-    # Dummy response following the provided YAML specification for the bookstore
-    order_status_response = {
-        'orderId': '12345',
-        'status': 'Order Approved',
-        'suggestedBooks': [
-            {'bookId': '123', 'title': 'The Best Book', 'author': 'Author 1'},
-            {'bookId': '456', 'title': 'The Second Best Book', 'author': 'Author 2'}
-        ]
-    }
+    # Print request object data
+    print("Request Data:", request_data)
+
+    with grpc.insecure_channel('fraud_detection:50051') as channel:
+        # Create a stub object.
+        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
+        # Call the service through the stub object.
+
+        for item in items:
+            response = stub.CheckFraud(fraud_detection.FraudRequest
+                (card_number=request_data.get(
+                "creditCard", {}).get("number"),
+                order_amount=item.get("quantity")))
+
+            if response.is_fraud:
+                return {"status": "Order Rejected",
+                        "error": {"message": "Fraud detected!"}}, 400
+
+    order_status_response = {"orderId": "12345", "status": "Order Approved",
+                             "suggestedBooks": []}
+    for idx, item in enumerate(items):
+        order_status_response["suggestedBooks"].append({
+            "bookId": idx + 1, "title": item["name"],
+            "author": f"Author {idx + 1}"
+        })
 
     return order_status_response
 
