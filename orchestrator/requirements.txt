@@ -10,4 +10,5 @@ watchdog==6.0.0
 grpcio==1.70.0
 grpcio-tools==1.70.0
 protobuf==5.29.6
-watchdog==6.0.0
+scikit-learn==1.4.0
+numpy==1.26.4
