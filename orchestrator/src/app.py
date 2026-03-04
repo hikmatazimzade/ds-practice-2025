@@ -1,97 +1,92 @@
 import sys
 import os
+import threading
 
-from flask import render_template
-
-# This set of lines are needed to import the gRPC stubs.
-# The path of the stubs is relative to the current file, or absolute inside the container.
-# Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
-fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/'
-                                                               'fraud_detection'))
+
+# Fraud detection
+fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
 sys.path.insert(0, fraud_detection_grpc_path)
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
 
+# Suggestions
+suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
+sys.path.insert(0, suggestions_grpc_path)
+import suggestions_pb2 as suggestions
+import suggestions_pb2_grpc as suggestions_grpc
+
 import grpc
-
-def greet(name='you'):
-    # Establish a connection with the fraud-detection gRPC service.
-    return f"Greeting {name}"
-
-
-    # return "greeting"
-    # with grpc.insecure_channel('fraud_detection:50051') as channel:
-    #     # Create a stub object.
-    #     stub = fraud_detection_grpc.HelloServiceStub(channel)
-    #     # Call the service through the stub object.
-    #     response = stub.SayHello(fraud_detection.HelloRequest(name=name))
-    # return response.greeting
-
-# Import Flask.
-# Flask is a web framework for Python.
-# It allows you to build a web application quickly.
-# For more information, see https://flask.palletsprojects.com/en/latest/
 from flask import Flask, request
 from flask_cors import CORS
 import json
 
-# Create a simple Flask app.
 app = Flask(__name__, template_folder="../../../frontend/src")
-# Enable CORS for the app.
 CORS(app, resources={r'/*': {'origins': '*'}})
 
-# Define a GET endpoint.
 @app.route('/', methods=['GET'])
 def index():
-    """
-    Responds with 'Hello, [name]' when a GET request is made to '/' endpoint.
-    """
-    # Test the fraud-detection gRPC service.
-    response = greet(name='orchestrator')
-    # Return the response.
-    return response
+    return "Orchestrator is running"
 
 @app.route('/checkout', methods=['POST'])
 def checkout():
-    """
-    Responds with a JSON object containing the order ID, status, and suggested books.
-    """
-    # Get request object data to json
     request_data = json.loads(request.data)
     items = request_data.get("items", {})
-
-    # Print request object data
     print("Request Data:", request_data)
 
-    with grpc.insecure_channel('fraud_detection:50051') as channel:
-        # Create a stub object.
-        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
-        # Call the service through the stub object.
+    results = {
+        "is_fraud": False,
+        "fraud_error": None,
+        "suggestions": []
+    }
 
-        for item in items:
-            response = stub.CheckFraud(fraud_detection.FraudRequest
-                (card_number=request_data.get(
-                "creditCard", {}).get("number"),
-                order_amount=item.get("quantity")))
+    def check_fraud():
+        try:
+            with grpc.insecure_channel('fraud_detection:50051') as channel:
+                stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
+                for item in items:
+                    response = stub.CheckFraud(fraud_detection.FraudRequest(
+                        card_number=request_data.get("creditCard", {}).get("number"),
+                        order_amount=item.get("quantity")
+                    ))
+                    if response.is_fraud:
+                        results["is_fraud"] = True
+                        results["fraud_error"] = "Fraud detected!"
+                        return
+        except Exception as e:
+            print(f"Fraud detection error: {e}")
 
-            if response.is_fraud:
-                return {"status": "Order Rejected",
-                        "error": {"message": "Fraud detected!"}}, 400
+    def get_suggestions():
+        try:
+            with grpc.insecure_channel('suggestions:50053') as channel:
+                stub = suggestions_grpc.SuggestionsServiceStub(channel)
+                response = stub.GetSuggestions(suggestions.SuggestionRequest(
+                    user_id=request_data.get("user", {}).get("name", "anonymous"),
+                    ordered_items=[item.get("name", "") for item in items]
+                ))
+                results["suggestions"] = [
+                    {"bookId": b.book_id, "title": b.title, "author": b.author}
+                    for b in response.suggestions
+                ]
+        except Exception as e:
+            print(f"Suggestions error: {e}")
 
-    order_status_response = {"orderId": "12345", "status": "Order Approved",
-                             "suggestedBooks": []}
-    for idx, item in enumerate(items):
-        order_status_response["suggestedBooks"].append({
-            "bookId": idx + 1, "title": item["name"],
-            "author": f"Author {idx + 1}"
-        })
+    # Run both threads in parallel
+    t1 = threading.Thread(target=check_fraud)
+    t2 = threading.Thread(target=get_suggestions)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
-    return order_status_response
+    if results["is_fraud"]:
+        return {"status": "Order Rejected", "error": {"message": results["fraud_error"]}}, 400
 
+    return {
+        "orderId": "12345",
+        "status": "Order Approved",
+        "suggestedBooks": results["suggestions"]
+    }
 
 if __name__ == '__main__':
-    # Run the app in debug mode to enable hot reloading.
-    # This is useful for development.
-    # The default port is 5000.
     app.run(host='0.0.0.0')
