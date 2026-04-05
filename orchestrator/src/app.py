@@ -3,12 +3,12 @@ import os
 import threading
 import grpc
 import json
+import uuid
 from flask import Flask, request
 from flask_cors import CORS
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 
-# Configuration des chemins gRPC
 utils_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb'))
 sys.path.insert(0, os.path.join(utils_path, 'fraud_detection'))
 sys.path.insert(0, os.path.join(utils_path, 'suggestions'))
@@ -17,48 +17,12 @@ sys.path.insert(0, os.path.join(utils_path, 'transaction_verification'))
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
 import suggestions_pb2 as suggestions
-import suggestions_pb2_grpc as suggestions_grpc 
+import suggestions_pb2_grpc as suggestions_grpc
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 
 app = Flask(__name__, template_folder="../../../frontend/src")
 CORS(app, resources={r'/*': {'origins': '*'}})
-
-# --- FONCTIONS WRAPPERS gRPC ---
-
-def check_fraud(card_number, amount):
-    with grpc.insecure_channel('fraud_detection:50051') as channel:
-        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
-        # On utilise card_number ou creditCard selon ton .proto
-        request_msg = fraud_detection.FraudRequest(
-            card_number=str(card_number), 
-            order_amount=float(amount)
-        )
-        return stub.CheckFraud(request_msg)
-
-def verify_transaction(name, contact, card, items_count, cvv, street, city, zip_code, country, state):
-    with grpc.insecure_channel('transaction_verification:50052') as channel:
-        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
-        request_msg = transaction_verification.TransactionVerificationRequest(
-            name=name, contact=contact, creditCard=card, itemsCount=items_count,
-            cvv=cvv, street=street, city=city, zip=zip_code, country=country, state=state
-        )
-        return stub.TransactionVerification(request_msg)
-
-def get_suggestions(user_name, item_names):
-    try:
-        with grpc.insecure_channel('suggestions:50053') as channel:
-            stub = suggestions_grpc.SuggestionsServiceStub(channel)
-            response = stub.GetSuggestions(suggestions.SuggestionRequest(
-                user_id=user_name,
-                ordered_items=item_names
-            ))
-            return [{"bookId": b.book_id, "title": b.title, "author": b.author} for b in response.suggestions]
-    except Exception as e:
-        print(f"Suggestions error: {e}")
-        return []
-
-# --- ROUTES FLASK ---
 
 @app.route('/', methods=['GET'])
 def index():
@@ -67,47 +31,110 @@ def index():
 @app.route('/checkout', methods=['POST'])
 def checkout():
     request_data = json.loads(request.data)
-    
-    # 1. Extraction des données
+    print("Request Data:", request_data)
+
     user = request_data.get('user', {})
     card_info = request_data.get('creditCard', {})
     addr_info = request_data.get('billingAddress', {})
     items = request_data.get('items', [])
-    
-    # --- ÉTAPE A : VERIFICATION (Port 50052) ---
-    v_res = verify_transaction(
-        user.get('name', ''), user.get('contact', ''), 
-        card_info.get('number', ''), len(items), 
-        card_info.get('cvv', ''), addr_info.get('street', ''),
-        addr_info.get('city', ''), addr_info.get('zip', ''),
-        addr_info.get('country', ''), addr_info.get('state', '')
-    )
-    
-    if not v_res.is_valid:
-            # ICI : On met le message dans un objet "error" pour le Frontend
-            return {
-                "status": "Order Rejected",
-                "orderId": "0",
-                "error": {"message": v_res.message}, 
-                "suggestedBooks": []
-            }, 400
 
-    # --- ÉTAPE B : FRAUDE (Port 50051) ---
-    amount = len(items) * 30 # Prix fictif
-    f_res = check_fraud(card_info.get('number', ''), amount)
+    # Generate unique order ID
+    order_id = str(uuid.uuid4())
+    print(f"[Orchestrator] Generated OrderID: {order_id}")
 
-    if f_res.is_fraud:
-        return {'orderId': '0', 'status': f"Order Rejected: Fraud Detected", 'suggestedBooks': []}, 400
-    
-    # --- ÉTAPE C : SUGGESTIONS (Port 50053) ---
-    # On récupère les suggestions pour l'utilisateur final
-    suggested_books = get_suggestions(user.get('name', 'anonymous'), [i.get('name', '') for i in items])
+    results = {
+        "is_fraud": False,
+        "fraud_error": None,
+        "is_valid": True,
+        "transaction_error": None,
+        "suggestions": []
+    }
 
-    # --- ÉTAPE D : APPROBATION FINALE ---
+    # --- Thread 1: Fraud Detection ---
+    def check_fraud():
+        try:
+            with grpc.insecure_channel('fraud_detection:50051') as channel:
+                stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
+                response = stub.CheckFraud(fraud_detection.FraudRequest(
+                    card_number=card_info.get('number', ''),
+                    order_amount=float(len(items) * 30)
+                ))
+                if response.is_fraud:
+                    results["is_fraud"] = True
+                    results["fraud_error"] = "Fraud detected!"
+        except Exception as e:
+            print(f"[Orchestrator] Fraud detection error: {e}")
+
+    # --- Thread 2: Transaction Verification ---
+    def verify_transaction():
+        try:
+            with grpc.insecure_channel('transaction_verification:50052') as channel:
+                stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
+                response = stub.TransactionVerification(
+                    transaction_verification.TransactionVerificationRequest(
+                        name=user.get('name', ''),
+                        contact=user.get('contact', ''),
+                        creditCard=card_info.get('number', ''),
+                        itemsCount=len(items),
+                        cvv=card_info.get('cvv', ''),
+                        street=addr_info.get('street', ''),
+                        city=addr_info.get('city', ''),
+                        zip=addr_info.get('zip', ''),
+                        country=addr_info.get('country', ''),
+                        state=addr_info.get('state', '')
+                    )
+                )
+                if not response.is_valid:
+                    results["is_valid"] = False
+                    results["transaction_error"] = response.message
+        except Exception as e:
+            print(f"[Orchestrator] Transaction verification error: {e}")
+
+    # --- Thread 3: Suggestions ---
+    def get_suggestions():
+        try:
+            with grpc.insecure_channel('suggestions:50053') as channel:
+                stub = suggestions_grpc.SuggestionsServiceStub(channel)
+                response = stub.GetSuggestions(suggestions.SuggestionRequest(
+                    user_id=user.get('name', 'anonymous'),
+                    ordered_items=[i.get('name', '') for i in items]
+                ))
+                results["suggestions"] = [
+                    {"bookId": b.book_id, "title": b.title, "author": b.author}
+                    for b in response.suggestions
+                ]
+        except Exception as e:
+            print(f"[Orchestrator] Suggestions error: {e}")
+
+    # --- Run all 3 threads in parallel ---
+    print(f"[Orchestrator] Spawning 3 worker threads for OrderID: {order_id}")
+    t1 = threading.Thread(target=check_fraud)
+    t2 = threading.Thread(target=verify_transaction)
+    t3 = threading.Thread(target=get_suggestions)
+
+    t1.start()
+    t2.start()
+    t3.start()
+
+    t1.join()
+    t2.join()
+    t3.join()
+
+    print(f"[Orchestrator] All threads finished for OrderID: {order_id}")
+
+    # --- Consolidate results ---
+    if not results["is_valid"]:
+        return {"orderId": order_id, "status": "Order Rejected",
+                "error": {"message": results["transaction_error"]}, "suggestedBooks": []}, 400
+
+    if results["is_fraud"]:
+        return {"orderId": order_id, "status": "Order Rejected",
+                "error": {"message": results["fraud_error"]}, "suggestedBooks": []}, 400
+
     return {
-        'orderId': '12345', 
-        'status': 'Order Approved', 
-        'suggestedBooks': suggested_books
+        "orderId": order_id,
+        "status": "Order Approved",
+        "suggestedBooks": results["suggestions"]
     }
 
 if __name__ == '__main__':

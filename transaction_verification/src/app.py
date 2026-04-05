@@ -79,7 +79,7 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
             try:
                 location = geolocator.geocode(full_address, timeout=10)
                 if location is None:
-                    is_valid = False
+                    # is_valid = False
                     error_message = f"Address not found by Geocoding API: {full_address}"
                 else:
                     print(f"Real address found! Coordinates: {location.latitude}, {location.longitude}")
