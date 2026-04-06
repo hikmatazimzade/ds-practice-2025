@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package transaction;
+
+service TransactionVerificationService {
+    // Initialisation : Envoie les données à stocker dans le cache du service
+    rpc InitOrder (TransactionVerificationRequest) returns (InitOrderResponse);
+
+    // Événement (a) : Vérification du panier
+    rpc VerifyItems (VerifyRequest) returns (VerifyResponse);
+
+    // Événement (b) : Vérification utilisateur (Email + Adresse)
+    rpc VerifyUserData (VerifyRequest) returns (VerifyResponse);
+
+    // Événement (c) : Vérification format Carte Bancaire
+    rpc VerifyCreditCard (VerifyRequest) returns (VerifyResponse);
+}
+
+// Les données complètes de la transaction (utilisées pour InitOrder)
+message TransactionVerificationRequest {
+    string order_id = 1;
+    string name = 2;
+    string contact = 3;
+    string creditCard = 4;
+    int32 itemsCount = 5;
+    string cvv = 6;
+    string street = 7;
+    string city = 8;
+    string zip = 9;
+    string country = 10;
+    string state = 11;
+}
+
+// Requête pour chaque événement individuel (a, b, c)
+message VerifyRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2; // L'horloge envoyée par l'Orchestrateur
+}
+
+// Réponse pour chaque événement individuel
+message VerifyResponse {
+    bool is_valid = 1;
+    string message = 2;
+    repeated int32 vector_clock = 3; // L'horloge mise à jour à renvoyer
+}
+
+message InitOrderResponse {
+    bool success = 1;
+}
