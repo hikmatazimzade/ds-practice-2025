@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package order_executor;
+
+// Inter-replica gRPC service for the Bully leader election algorithm.
+service OrderExecutorService {
+    // Sent by a candidate to all higher-ID replicas to start an election.
+    rpc Election (ElectionRequest) returns (ElectionResponse);
+    // Broadcast by the winner to announce itself as the new leader.
+    rpc Coordinator (CoordinatorRequest) returns (CoordinatorResponse);
+    // Periodic liveness probe sent from non-leaders to the current leader.
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message ElectionRequest {
+    int32 candidate_id = 1;
+}
+
+message ElectionResponse {
+    bool alive = 1;
+}
+
+message CoordinatorRequest {
+    int32 leader_id = 1;
+}
+
+message CoordinatorResponse {
+    bool acknowledged = 1;
+}
+
+message HeartbeatRequest {
+    int32 sender_id = 1;
+}
+
+message HeartbeatResponse {
+    bool alive = 1;
+}

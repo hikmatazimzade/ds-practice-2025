@@ -1,5 +1,6 @@
 import sys
 import os
+import uuid
 
 from flask import render_template
 
@@ -7,11 +8,15 @@ from flask import render_template
 # The path of the stubs is relative to the current file, or absolute inside the container.
 # Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
-fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/'
-                                                               'fraud_detection'))
+fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
+order_queue_grpc_path     = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_queue'))
 sys.path.insert(0, fraud_detection_grpc_path)
+sys.path.insert(0, order_queue_grpc_path)
+
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
+import order_queue_pb2 as order_queue_pb2
+import order_queue_pb2_grpc as order_queue_grpc
 
 import grpc
 
@@ -79,7 +84,27 @@ def checkout():
                 return {"status": "Order Rejected",
                         "error": {"message": "Fraud detected!"}}, 400
 
-    order_status_response = {"orderId": "12345", "status": "Order Approved",
+    # Build the Order protobuf message and enqueue it
+    order_id = str(uuid.uuid4())
+    order_items = [
+        order_queue_pb2.OrderItem(name=item.get("name", ""), quantity=item.get("quantity", 1))
+        for item in items
+    ]
+    order = order_queue_pb2.Order(
+        order_id=order_id,
+        items=order_items,
+        user_name=request_data.get("userInfo", {}).get("name", ""),
+        total_amount=sum(item.get("quantity", 1) for item in items),
+    )
+
+    with grpc.insecure_channel('order_queue:50055') as channel:
+        queue_stub = order_queue_grpc.OrderQueueServiceStub(channel)
+        enqueue_resp = queue_stub.Enqueue(order_queue_pb2.EnqueueRequest(order=order))
+        if not enqueue_resp.success:
+            return {"status": "Order Rejected", "error": {"message": "Failed to enqueue order."}}, 500
+        print(f"Order enqueued: {enqueue_resp.order_id}")
+
+    order_status_response = {"orderId": order_id, "status": "Order Approved",
                              "suggestedBooks": []}
     for idx, item in enumerate(items):
         order_status_response["suggestedBooks"].append({
