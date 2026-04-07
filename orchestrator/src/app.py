@@ -50,7 +50,7 @@ def checkout():
     failure = {"detected": False, "message": None}
 
     # -------------------------------------------------------------------------
-    # PHASE 1 — InitOrder on all services in parallel
+    # PHASE 1 — InitOrder on all 3 services in parallel
     # -------------------------------------------------------------------------
     def init_transaction():
         try:
@@ -172,7 +172,7 @@ def checkout():
                 "error": {"message": failure["message"]}, "suggestedBooks": []}, 400
 
     # -------------------------------------------------------------------------
-    # PHASE 3 — Event c (transaction: verify credit card)
+    # PHASE 3 — Event c (transaction) and event d (fraud) in parallel
     # -------------------------------------------------------------------------
     def event_c():
         if failure["detected"]:
@@ -198,14 +198,35 @@ def checkout():
             failure["detected"] = True
             failure["message"] = str(e)
 
-    # TODO: plug in events d and e — fraud proto is ready (pull fraud branch)
-    # event_d -> fraud_grpc.CheckUserData(FraudCheckRequest(order_id, vector_clock))
-    # event_e -> fraud_grpc.CheckCardFraud(FraudCheckRequest(order_id, vector_clock))
-    # Both return FraudCheckResponse(is_fraud, message, vector_clock)
+    def event_d():
+        if failure["detected"]:
+            return
+        try:
+            with grpc.insecure_channel('fraud_detection:50051') as channel:
+                stub = fraud_grpc.FraudDetectionServiceStub(channel)
+                with vc_lock:
+                    vc_copy = list(vector_clock)
+                resp = stub.CheckUserData(fraud_pb2.FraudCheckRequest(
+                    order_id=order_id,
+                    vector_clock=vc_copy
+                ))
+                print(f"[Orchestrator] Event (d) CheckUserData — is_fraud={resp.is_fraud} VC={list(resp.vector_clock)}")
+                with vc_lock:
+                    for i in range(NUM_SERVICES):
+                        vector_clock[i] = max(vector_clock[i], resp.vector_clock[i])
+                if resp.is_fraud:
+                    failure["detected"] = True
+                    failure["message"] = resp.message
+        except Exception as e:
+            print(f"[Orchestrator] Event (d) error: {e}")
+            failure["detected"] = True
+            failure["message"] = str(e)
 
-    print(f"[Orchestrator] Phase 3 — Event c")
+    print(f"[Orchestrator] Phase 3 — Events c ‖ d")
     tc = threading.Thread(target=event_c)
-    tc.start(); tc.join()
+    td = threading.Thread(target=event_d)
+    tc.start(); td.start()
+    tc.join(); td.join()
     print(f"[Orchestrator] Phase 3 done. VC: {vector_clock}")
 
     if failure["detected"]:
@@ -213,7 +234,43 @@ def checkout():
                 "error": {"message": failure["message"]}, "suggestedBooks": []}, 400
 
     # -------------------------------------------------------------------------
-    # PHASE 4 — Event f (suggestions, after c since d/e skipped for now)
+    # PHASE 4 — Event e (fraud: check card) — after both c and d
+    # -------------------------------------------------------------------------
+    def event_e():
+        if failure["detected"]:
+            return
+        try:
+            with grpc.insecure_channel('fraud_detection:50051') as channel:
+                stub = fraud_grpc.FraudDetectionServiceStub(channel)
+                with vc_lock:
+                    vc_copy = list(vector_clock)
+                resp = stub.CheckCardFraud(fraud_pb2.FraudCheckRequest(
+                    order_id=order_id,
+                    vector_clock=vc_copy
+                ))
+                print(f"[Orchestrator] Event (e) CheckCardFraud — is_fraud={resp.is_fraud} VC={list(resp.vector_clock)}")
+                with vc_lock:
+                    for i in range(NUM_SERVICES):
+                        vector_clock[i] = max(vector_clock[i], resp.vector_clock[i])
+                if resp.is_fraud:
+                    failure["detected"] = True
+                    failure["message"] = resp.message
+        except Exception as e:
+            print(f"[Orchestrator] Event (e) error: {e}")
+            failure["detected"] = True
+            failure["message"] = str(e)
+
+    print(f"[Orchestrator] Phase 4 — Event e")
+    te = threading.Thread(target=event_e)
+    te.start(); te.join()
+    print(f"[Orchestrator] Phase 4 done. VC: {vector_clock}")
+
+    if failure["detected"]:
+        return {"orderId": order_id, "status": "Order Rejected",
+                "error": {"message": failure["message"]}, "suggestedBooks": []}, 400
+
+    # -------------------------------------------------------------------------
+    # PHASE 5 — Event f (suggestions) — after e
     # -------------------------------------------------------------------------
     suggested_books = []
 
@@ -236,13 +293,13 @@ def checkout():
         except Exception as e:
             print(f"[Orchestrator] Event (f) error: {e}")
 
-    print(f"[Orchestrator] Phase 4 — Event f")
+    print(f"[Orchestrator] Phase 5 — Event f")
     tf = threading.Thread(target=event_f)
     tf.start(); tf.join()
-    print(f"[Orchestrator] Phase 4 done. Final VC: {vector_clock}")
+    print(f"[Orchestrator] Phase 5 done. Final VC: {vector_clock}")
 
     # -------------------------------------------------------------------------
-    # PHASE 5 — Enqueue approved order
+    # PHASE 6 — Enqueue approved order
     # -------------------------------------------------------------------------
     try:
         with grpc.insecure_channel('order_queue:50055') as channel:
