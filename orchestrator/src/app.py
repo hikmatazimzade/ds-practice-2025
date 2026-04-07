@@ -86,21 +86,27 @@ def checkout():
         except Exception as e:
             print(f"[Orchestrator] InitOrder suggestions error: {e}")
 
-    # TODO: uncomment when fraud friend updates their proto
-    # def init_fraud():
-    #     try:
-    #         with grpc.insecure_channel('fraud_detection:50051') as channel:
-    #             stub = fraud_grpc.FraudDetectionServiceStub(channel)
-    #             resp = stub.InitOrder(fraud_pb2.FraudInitRequest(...))
-    #             print(f"[Orchestrator] InitOrder -> fraud: {resp.success}")
-    #     except Exception as e:
-    #         print(f"[Orchestrator] InitOrder fraud error: {e}")
+    def init_fraud():
+        try:
+            with grpc.insecure_channel('fraud_detection:50051') as channel:
+                stub = fraud_grpc.FraudDetectionServiceStub(channel)
+                resp = stub.InitOrder(fraud_pb2.FraudInitRequest(
+                    order_id=order_id,
+                    card_number=card_info.get('number', ''),
+                    order_amount=float(len(items)),
+                    name=user.get('name', ''),
+                    contact=user.get('contact', '')
+                ))
+                print(f"[Orchestrator] InitOrder -> fraud: {resp.success}")
+        except Exception as e:
+            print(f"[Orchestrator] InitOrder fraud error: {e}")
 
     print(f"[Orchestrator] Phase 1 — InitOrder")
     t_init1 = threading.Thread(target=init_transaction)
     t_init2 = threading.Thread(target=init_suggestions)
-    t_init1.start(); t_init2.start()
-    t_init1.join(); t_init2.join()
+    t_init3 = threading.Thread(target=init_fraud)
+    t_init1.start(); t_init2.start(); t_init3.start()
+    t_init1.join(); t_init2.join(); t_init3.join()
     print(f"[Orchestrator] Phase 1 done. VC: {vector_clock}")
 
     # -------------------------------------------------------------------------
@@ -192,11 +198,10 @@ def checkout():
             failure["detected"] = True
             failure["message"] = str(e)
 
-    # TODO: uncomment when fraud friend updates their proto
-    # def event_d():
-    #     """Fraud: check user data"""
-    # def event_e():
-    #     """Fraud: check credit card for fraud"""
+    # TODO: plug in events d and e — fraud proto is ready (pull fraud branch)
+    # event_d -> fraud_grpc.CheckUserData(FraudCheckRequest(order_id, vector_clock))
+    # event_e -> fraud_grpc.CheckCardFraud(FraudCheckRequest(order_id, vector_clock))
+    # Both return FraudCheckResponse(is_fraud, message, vector_clock)
 
     print(f"[Orchestrator] Phase 3 — Event c")
     tc = threading.Thread(target=event_c)

@@ -3,14 +3,35 @@ syntax = "proto3";
 package fraud_detection;
 
 service FraudDetectionService {
-    rpc CheckFraud (FraudRequest) returns (FraudResponse);
+    // Initialisation: store order data in local cache
+    rpc InitOrder (FraudInitRequest) returns (FraudInitResponse);
+
+    // Event (d): check user data for fraud signals
+    rpc CheckUserData (FraudCheckRequest) returns (FraudCheckResponse);
+
+    // Event (e): check card for fraud (Luhn + anomaly detection)
+    rpc CheckCardFraud (FraudCheckRequest) returns (FraudCheckResponse);
 }
 
-message FraudRequest {
-    string card_number = 1;
-    float order_amount = 2;
+message FraudInitRequest {
+    string order_id = 1;
+    string card_number = 2;
+    float order_amount = 3;
+    string name = 4;
+    string contact = 5;
 }
 
-message FraudResponse {
+message FraudInitResponse {
+    bool success = 1;
+}
+
+message FraudCheckRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message FraudCheckResponse {
     bool is_fraud = 1;
+    string message = 2;
+    repeated int32 vector_clock = 3;
 }
