@@ -53,3 +53,7 @@ Open your browser at: http://localhost:8080
 
 ## Election Bully Diagram
 ![Alt text](Bully_election_sequence.png)
+
+
+## Vector Clock Diagram simulation
+![Alt text](vector_diagram_sequence.png)
