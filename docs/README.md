@@ -50,3 +50,6 @@ Open your browser at: http://localhost:8080
 
 ## Architecture Diagram
 ![Alt text](arch_diagram.png)
+
+## Election Bully Diagram
+![Alt text](Bully_election_sequence.png)
