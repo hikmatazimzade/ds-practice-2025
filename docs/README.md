@@ -92,8 +92,8 @@ Open your browser at: http://localhost:8080
 
 ## Diagrams
 
-![System Diagram](system_diagram.png)
-![Architecture Diagram](arch_diagram.png)
+![System Diagram](system model.png)
+![Architecture Diagram](Architecture_model.png)
 ## Bully Election Diagram
 ![Bully election](Bully_election_sequence.png)
 ## Vector Clock Diagram
