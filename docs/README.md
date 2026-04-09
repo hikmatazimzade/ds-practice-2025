@@ -91,12 +91,13 @@ Open your browser at: http://localhost:8080
 - **Order Executor (leader) → Order Queue**: gRPC (Dequeue)
 
 ## Diagrams
-
-![System Diagram](system model.png)
+### System model Diagram
+![System Diagram](system_model.png)
+### Architecture model Diagram
 ![Architecture Diagram](Architecture_model.png)
-## Bully Election Diagram
+### Bully Election Diagram
 ![Bully election](Bully_election_sequence.png)
-## Vector Clock Diagram
+### Vector Clock Diagram
 ![Vector diagram](vector_diagram_sequence.png)
 
 ## Documentation
