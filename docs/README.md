@@ -102,5 +102,13 @@ Open your browser at: http://localhost:8080
 
 ## Documentation
 
-See [system_model.md](system_model.md) for the full system model description
-including vector clock analysis and leader election details.
+
+## Architecture Diagram
+![Alt text](arch_diagram.png)
+
+## Election Bully Diagram
+![Alt text](Bully_election_sequence.png)
+
+
+## Vector Clock Diagram simulation
+![Alt text](vector_diagram_sequence.png)
