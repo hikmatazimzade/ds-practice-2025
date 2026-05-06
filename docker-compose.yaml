@@ -122,3 +122,45 @@ services:
       - ./order_executor/src:/app/order_executor/src
     depends_on:
       - order_queue
+
+  books_database_1:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+      - REPLICA_ID=1
+      - ALL_REPLICAS=1:books_database_1:50057,2:books_database_2:50057,3:books_database_3:50057
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src
+
+  books_database_2:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+      - REPLICA_ID=2
+      - ALL_REPLICAS=1:books_database_1:50057,2:books_database_2:50057,3:books_database_3:50057
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src
+
+  books_database_3:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+      - REPLICA_ID=3
+      - ALL_REPLICAS=1:books_database_1:50057,2:books_database_2:50057,3:books_database_3:50057
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src

@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package books_database;
+
+// Replicated key-value store for book stock with Primary-Backup
+// consistency and 2-Phase Commit participant operations.
+service BooksDatabaseService {
+    // Normal operations (clients hit the primary; primary fans Write to backups).
+    rpc Read   (ReadRequest)   returns (ReadResponse);
+    rpc Write  (WriteRequest)  returns (WriteResponse);
+
+    // Internal RPC: primary -> backup synchronous replication.
+    rpc Replicate (WriteRequest) returns (WriteResponse);
+
+    // 2-Phase Commit participant RPCs (called by the orchestrator/coordinator).
+    rpc Prepare (PrepareRequest) returns (PrepareResponse);
+    rpc Commit  (CommitRequest)  returns (CommitResponse);
+    rpc Abort   (AbortRequest)   returns (AbortResponse);
+}
+
+// ---- Normal ops ----------------------------------------------------------
+
+message ReadRequest  { string title = 1; }
+message ReadResponse { bool found = 1; int32 stock = 2; }
+
+message WriteRequest { string title = 1; int32 stock = 2; }
+message WriteResponse { bool success = 1; }
+
+// ---- 2PC participant -----------------------------------------------------
+
+// One stock change as part of a 2PC transaction.
+message StockChange {
+    string title = 1;
+    int32  delta = 2;  // negative = decrement (purchase)
+}
+
+message PrepareRequest {
+    string transaction_id = 1;
+    repeated StockChange changes = 2;
+}
+message PrepareResponse {
+    bool vote_commit = 1;  // true = VOTE-COMMIT, false = VOTE-ABORT
+    string reason   = 2;
+}
+
+message CommitRequest  { string transaction_id = 1; }
+message CommitResponse { bool success = 1; }
+
+message AbortRequest   { string transaction_id = 1; }
+message AbortResponse  { bool success = 1; }
