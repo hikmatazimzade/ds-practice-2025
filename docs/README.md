@@ -112,3 +112,6 @@ Open your browser at: http://localhost:8080
 
 ## Vector Clock Diagram simulation
 ![Alt text](vector_diagram_sequence.png)
+
+## Consistency diagram
+![Alt text](Consistency_diagram.png)
