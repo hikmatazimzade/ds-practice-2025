@@ -21,7 +21,7 @@ class PaymentService(pb_grpc.PaymentServiceServicer):
     def Prepare(self, request, context):
         print(f"📦 [PREPARE] Reçu pour la transac {request.transaction_id} - Montant: {request.amount}€")
         # Si le biff est là (>0), on valide le ticket
-        if request.amount > 0:
+        if request.amount >= 0:
             self.transactions[request.transaction_id] = "PREPARED"
             return pb.PrepareResponse(ok=True)
         return pb.PrepareResponse(ok=False)
