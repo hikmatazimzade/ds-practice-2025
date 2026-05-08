@@ -115,3 +115,8 @@ Open your browser at: http://localhost:8080
 
 ## Consistency diagram
 ![Alt text](Consistency_diagram.png)
+
+## 2CP COMMIT diagram
+![Alt text](2PC_COMMIT.png)
+## 2CP ABORT diagram
+![Alt text](2PC_ABORT.png)
