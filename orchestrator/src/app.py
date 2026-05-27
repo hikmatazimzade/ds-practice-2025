@@ -4,8 +4,38 @@ import threading
 import grpc
 import json
 import uuid
+import time
 from flask import Flask, request
 from flask_cors import CORS
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+# Setup OpenTelemetry Tracing
+trace.set_tracer_provider(TracerProvider())
+tracer = trace.get_tracer(__name__)
+span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+trace.get_tracer_provider().add_span_processor(span_processor)
+
+# Setup OpenTelemetry Metrics
+metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint="http://observability:4318/v1/metrics"))
+metrics.set_meter_provider(MeterProvider(metric_readers=[metric_reader]))
+meter = metrics.get_meter(__name__)
+
+checkout_counter = meter.create_counter("checkout_requests_total", description="Total number of checkout requests")
+checkout_histogram = meter.create_histogram("checkout_duration_seconds", description="Duration of checkout processing")
+active_requests_counter = meter.create_up_down_counter("active_checkout_requests", description="Number of currently active checkout requests")
+
+def get_active_threads(options):
+    yield metrics.Observation(threading.active_count())
+
+meter.create_observable_gauge("active_threads", callbacks=[get_active_threads], description="Number of active threads")
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 utils_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb'))
@@ -34,20 +64,26 @@ def index():
 
 @app.route('/checkout', methods=['POST'])
 def checkout():
-    request_data = json.loads(request.data)
-    print("Request Data:", request_data)
+    start_time = time.time()
+    checkout_counter.add(1)
+    
+    with tracer.start_as_current_span("orchestrator_checkout") as span:
+        request_data = json.loads(request.data)
+        print("Request Data:", request_data)
 
-    user = request_data.get('user', {})
-    card_info = request_data.get('creditCard', {})
-    addr_info = request_data.get('billingAddress', {})
-    items = request_data.get('items', [])
+        user = request_data.get('user', {})
+        card_info = request_data.get('creditCard', {})
+        addr_info = request_data.get('billingAddress', {})
+        items = request_data.get('items', [])
 
-    order_id = str(uuid.uuid4())
-    print(f"[Orchestrator] Generated OrderID: {order_id}")
+        order_id = str(uuid.uuid4())
+        span.set_attribute("order_id", order_id)
+        span.set_attribute("items_count", len(items))
+        print(f"[Orchestrator] Generated OrderID: {order_id}")
 
-    vc_lock = threading.Lock()
-    vector_clock = [0] * NUM_SERVICES
-    failure = {"detected": False, "message": None}
+        vc_lock = threading.Lock()
+        vector_clock = [0] * NUM_SERVICES
+        failure = {"detected": False, "message": None}
 
     # -------------------------------------------------------------------------
     # PHASE 1 — InitOrder on all 3 services in parallel
@@ -316,6 +352,7 @@ def checkout():
     except Exception as e:
         print(f"[Orchestrator] Enqueue error: {e}")
 
+    checkout_histogram.record(time.time() - start_time)
     return {
         "orderId": order_id,
         "status": "Order Approved",

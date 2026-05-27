@@ -4,3 +4,6 @@ protobuf==6.33.6
 watchdog==6.0.0
 scikit-learn==1.4.0
 numpy==1.26.4
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp

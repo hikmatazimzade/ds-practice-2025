@@ -171,10 +171,19 @@ services:
         dockerfile: ./payment/Dockerfile
       container_name: payment_service
       ports:
-        - "50060:50060"
+        - "45060:50060"
       environment:
         - PYTHONUNBUFFERED=TRUE
         - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
       volumes:
         - ./utils:/app/utils
         - ./payment/src:/app/payment/src
+
+  observability:
+    image: grafana/otel-lgtm
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
