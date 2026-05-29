@@ -1,32 +1,30 @@
 """
 Books Database Service — Primary-Backup replicated KV store + 2PC participant.
-
-Replication model
------------------
-* Three replicas (REPLICA_ID = 1, 2, 3); replica 1 is the primary.
-* Clients send Read/Write to the primary. Read is served locally.
-  A Write is forwarded synchronously to every backup (Replicate RPC) before
-  the primary acknowledges — strong (synchronous) primary-backup.
-* Backups reject direct Write requests; they only accept Replicate (from the
-  primary) and the 2PC participant RPCs (Prepare/Commit/Abort).
-
-2PC participant
----------------
-* Prepare: lock the listed titles, validate stock, write to a tentative log.
-  Vote COMMIT if every change is satisfiable; otherwise VOTE-ABORT and release
-  locks. The primary additionally Prepares each backup so they can apply the
-  same change atomically.
-* Commit: apply the tentative changes, release locks. On the primary, the
-  commit is replicated to backups too.
-* Abort: drop the tentative changes, release locks (idempotent).
 """
 
 import os
 import sys
 import threading
+import logging
 from concurrent import futures
 
 import grpc
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.grpc import GrpcInstrumentorServer, GrpcInstrumentorClient
+
+# Setup OpenTelemetry
+trace.set_tracer_provider(TracerProvider())
+span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+trace.get_tracer_provider().add_span_processor(span_processor)
+GrpcInstrumentorServer().instrument()
+GrpcInstrumentorClient().instrument()
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logger = logging.getLogger("books_database")
 
 # Make the generated pb modules importable.
 FILE = __file__ if "__file__" in globals() else os.getenv("PYTHONFILE", "")
@@ -67,7 +65,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
         self._pending  = {}                      # txn_id -> [(title, delta), ...]
 
         role = "PRIMARY" if self.is_primary else "BACKUP"
-        print(f"[Replica {my_id}/{role}] ready. Peers: {replicas}")
+        logger.debug(f"[Replica {my_id}/{role}] ready. Peers: {replicas}")
 
     # ------------------------------------------------------------------
     # Normal operations
@@ -78,20 +76,20 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
         with self._lock:
             stock = self._store.get(request.title)
         found = stock is not None
-        print(f"[Replica {self.my_id}] Read('{request.title}') -> "
+        logger.debug(f"[Replica {self.my_id}] Read('{request.title}') -> "
               f"{'stock=' + str(stock) if found else 'NOT FOUND'}")
         return pb.ReadResponse(found=found, stock=stock or 0)
 
     def Write(self, request, context):
         # Only the primary accepts client writes.
         if not self.is_primary:
-            print(f"[Replica {self.my_id}] Rejecting Write — not primary.")
+            logger.debug(f"[Replica {self.my_id}] Rejecting Write — not primary.")
             return pb.WriteResponse(success=False)
 
         # Apply locally, then replicate to every backup before acknowledging.
         with self._lock:
             self._store[request.title] = request.stock
-        print(f"[Primary] Write '{request.title}' = {request.stock}")
+        logger.debug(f"[Primary] Write '{request.title}' = {request.stock}")
 
         ok = self._replicate_to_backups(request)
         return pb.WriteResponse(success=ok)
@@ -100,7 +98,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
         # Inter-replica RPC: primary tells a backup to mirror a write.
         with self._lock:
             self._store[request.title] = request.stock
-        print(f"[Replica {self.my_id}] Replicated '{request.title}' = {request.stock}")
+        logger.debug(f"[Replica {self.my_id}] Replicated '{request.title}' = {request.stock}")
         return pb.WriteResponse(success=True)
 
     # ------------------------------------------------------------------
@@ -150,7 +148,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
                     reason="a backup voted abort",
                 )
 
-        print(f"[Replica {self.my_id}] PREPARE {txn}: VOTE-COMMIT")
+        logger.info(f"[Replica {self.my_id}] PREPARE {txn}: VOTE-COMMIT")
         return pb.PrepareResponse(vote_commit=True, reason="")
 
     def Commit(self, request, context):
@@ -179,7 +177,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
             for title, delta in changes:
                 self._store[title] = self._store.get(title, 0) + delta
                 self._locked.discard(title)
-        print(f"[Replica {self.my_id}] COMMIT {txn}: {changes}")
+        logger.info(f"[Replica {self.my_id}] COMMIT {txn}: {changes}")
 
     def _abort_local(self, txn: str):
         with self._lock:
@@ -188,7 +186,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
                 return
             for title, _ in changes:
                 self._locked.discard(title)
-        print(f"[Replica {self.my_id}] ABORT {txn}")
+        logger.info(f"[Replica {self.my_id}] ABORT {txn}")
 
     # ------------------------------------------------------------------
     # Inter-replica fan-out (primary only)
@@ -207,7 +205,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
             try:
                 stub.Replicate(write_req, timeout=RPC_TIMEOUT)
             except Exception as e:
-                print(f"[Primary] Replicate -> {rid} FAILED: {e}")
+                logger.error(f"[Primary] Replicate -> {rid} FAILED: {e}")
                 return False
         return True
 
@@ -216,10 +214,10 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
             try:
                 resp = stub.Prepare(prepare_req, timeout=RPC_TIMEOUT)
                 if not resp.vote_commit:
-                    print(f"[Primary] Backup {rid} voted ABORT: {resp.reason}")
+                    logger.debug(f"[Primary] Backup {rid} voted ABORT: {resp.reason}")
                     return False
             except Exception as e:
-                print(f"[Primary] Prepare -> {rid} FAILED: {e}")
+                logger.error(f"[Primary] Prepare -> {rid} FAILED: {e}")
                 return False
         return True
 
@@ -229,7 +227,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
                 stub.Commit(pb.CommitRequest(transaction_id=txn),
                             timeout=RPC_TIMEOUT)
             except Exception as e:
-                print(f"[Primary] Commit -> {rid} FAILED: {e}")
+                logger.error(f"[Primary] Commit -> {rid} FAILED: {e}")
 
     def _fanout_abort(self, txn: str):
         for rid, stub in self._backup_stubs():
@@ -237,7 +235,7 @@ class BooksDatabaseService(pb_grpc.BooksDatabaseServiceServicer):
                 stub.Abort(pb.AbortRequest(transaction_id=txn),
                            timeout=RPC_TIMEOUT)
             except Exception as e:
-                print(f"[Primary] Abort -> {rid} FAILED: {e}")
+                logger.error(f"[Primary] Abort -> {rid} FAILED: {e}")
 
 
 # ---- Entry point ---------------------------------------------------------
@@ -264,7 +262,7 @@ def serve():
     )
     server.add_insecure_port(f"[::]:{PORT}")
     server.start()
-    print(f"[Replica {my_id}] Books Database listening on :{PORT}")
+    logger.debug(f"[Replica {my_id}] Books Database listening on :{PORT}")
     server.wait_for_termination()
 
 

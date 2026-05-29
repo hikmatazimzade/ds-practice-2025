@@ -28,20 +28,35 @@ If, for some reason, changes to the code are not reflected, try to force rebuild
 docker compose up --build
 ```
 
-## Leader Election (Bully Algorithm)
+## Observability & Grading
 
-The `order_executor` service runs as 3 replicas (`order_executor_1`, `order_executor_2`, `order_executor_3`) that elect a leader using the **Bully Algorithm**. Only the leader dequeues and processes orders from the order queue.
+This project is fully instrumented for distributed tracing and metrics collection.
 
-**How it works:**
+### 📊 Grafana Dashboard
+A pre-configured dashboard is available in `docs/dashboard.json`.
+1. Open Grafana at [http://localhost:3000](http://localhost:3000) (admin/admin).
+2. Go to **Dashboards** -> **Import**.
+3. Upload `docs/dashboard.json` or paste its content.
 
-1. On startup, each replica waits a few seconds for peers to come up, then initiates an election.
-2. A replica sends an `Election` message to all replicas with a higher ID.
-3. If a higher-ID replica is alive, it responds and takes over the election itself.
-4. If no higher-ID replica responds, the sender declares itself leader by broadcasting a `Coordinator` message to all replicas.
-5. All replicas accept the `Coordinator` message and update their known leader.
-6. Non-leaders periodically send a `Heartbeat` to the leader. If the leader stops responding, they trigger a new election.
+### 🧪 Automated Tests & Demo
+Run the end-to-end test suite to verify all distributed scenarios:
+```bash
+python e2e_tests.py
+```
+The suite demonstrates:
+- Order validation and causal ordering (Vector Clocks).
+- Parallel processing and fraud detection.
+- Fault tolerance via Leader Election (Bully).
+- Atomic distributed transactions (2-Phase Commit).
 
-The result is that **the highest-ID live replica is always the leader**. If it goes down, the next highest takes over automatically.
+### 🏛️ Architecture
+The system architecture diagram can be found in `docs/architecture.md` (viewable in GitHub or any Markdown renderer).
+
+### 📝 Logging
+All services use structured logging. You can view the full distributed flow by running:
+```bash
+docker compose logs -f orchestrator order_executor_3 books_database_1
+```
 
 ### Run the code locally
 

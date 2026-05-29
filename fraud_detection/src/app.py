@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 from concurrent import futures
 
 import numpy as np
@@ -15,17 +16,23 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.instrumentation.grpc import GrpcInstrumentorServer
 
 # Setup OpenTelemetry Tracing
 trace.set_tracer_provider(TracerProvider())
 tracer = trace.get_tracer(__name__)
 span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
 trace.get_tracer_provider().add_span_processor(span_processor)
+GrpcInstrumentorServer().instrument()
 
 # Setup OpenTelemetry Metrics
 metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint="http://observability:4318/v1/metrics"))
 metrics.set_meter_provider(MeterProvider(metric_readers=[metric_reader]))
 meter = metrics.get_meter(__name__)
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logger = logging.getLogger("fraud_detection")
 
 fraud_checks_counter = meter.create_counter("fraud_checks_total", description="Total number of fraud checks")
 fraud_detected_counter = meter.create_counter("fraud_detected_total", description="Total number of frauds detected")
@@ -67,14 +74,14 @@ class FraudDetectionService(pb_grpc.FraudDetectionServiceServicer):
         bulk = np.random.randint(10, 101, size=(200, 1))
         self.model = IsolationForest(contamination=0.01, random_state=42)
         self.model.fit(np.vstack((retail, bulk)))
-        print("Fraud Service ready: Luhn + Isolation Forest trained.")
+        logger.debug("Fraud Service ready: Luhn + Isolation Forest trained.")
 
     def InitOrder(self, request, context):
         orders_cache[request.order_id] = {
             "data": request,
             "vc": [0] * NUM_SERVICES
         }
-        print(f"[Fraud] InitOrder -> cached order {request.order_id}")
+        logger.debug(f"[Fraud] InitOrder -> cached order {request.order_id}")
         return pb.FraudInitResponse(success=True)
 
     def CheckUserData(self, request, context):
@@ -96,7 +103,7 @@ class FraudDetectionService(pb_grpc.FraudDetectionServiceServicer):
                 fraud_detected_counter.add(1)
                 span.set_attribute("fraud_detected", True)
             msg = "User data looks suspicious" if is_fraud else "User data OK"
-            print(f"[Fraud] CheckUserData order={order_id} is_fraud={is_fraud} VC={entry['vc']}")
+            logger.debug(f"[Fraud] CheckUserData order={order_id} is_fraud={is_fraud} VC={entry['vc']}")
             return pb.FraudCheckResponse(is_fraud=is_fraud, message=msg, vector_clock=entry["vc"])
 
     def CheckCardFraud(self, request, context):
@@ -116,7 +123,7 @@ class FraudDetectionService(pb_grpc.FraudDetectionServiceServicer):
                 fraud_detected_counter.add(1)
                 span.set_attribute("fraud_detected", True)
                 span.set_attribute("fraud_reason", "invalid_luhn")
-                print(f"[Fraud] CheckCardFraud order={order_id} -> invalid card (Luhn)")
+                logger.debug(f"[Fraud] CheckCardFraud order={order_id} -> invalid card (Luhn)")
                 return pb.FraudCheckResponse(is_fraud=True, message="Invalid card number", vector_clock=entry["vc"])
 
             prediction = self.model.predict(np.array([[data.order_amount]]))
@@ -126,7 +133,7 @@ class FraudDetectionService(pb_grpc.FraudDetectionServiceServicer):
                 span.set_attribute("fraud_detected", True)
                 span.set_attribute("fraud_reason", "anomalous_amount")
             msg = "Anomalous order amount" if is_fraud else "Card OK"
-            print(f"[Fraud] CheckCardFraud order={order_id} is_fraud={is_fraud} VC={entry['vc']}")
+            logger.debug(f"[Fraud] CheckCardFraud order={order_id} is_fraud={is_fraud} VC={entry['vc']}")
             return pb.FraudCheckResponse(is_fraud=is_fraud, message=msg, vector_clock=entry["vc"])
 
 
@@ -135,7 +142,7 @@ def serve():
     pb_grpc.add_FraudDetectionServiceServicer_to_server(FraudDetectionService(), server)
     server.add_insecure_port("[::]:50051")
     server.start()
-    print("Fraud Detection Server started on port 50051.")
+    logger.info("Fraud Detection Server started on port 50051.")
     server.wait_for_termination()
 
 

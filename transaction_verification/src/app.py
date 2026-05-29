@@ -6,6 +6,18 @@ import grpc
 from concurrent import futures
 import logging
 
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.grpc import GrpcInstrumentorServer
+
+# Setup OpenTelemetry
+trace.set_tracer_provider(TracerProvider())
+span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+trace.get_tracer_provider().add_span_processor(span_processor)
+GrpcInstrumentorServer().instrument()
+
 # Configuration gRPC pour remonter vers utils/pb
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 utils_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/transaction_verification'))
@@ -15,8 +27,8 @@ import transaction_verification_pb2 as pb
 import transaction_verification_pb2_grpc as pb_grpc
 
 # Logging setup (comme ton pote)
-logging.basicConfig(level=logging.INFO, format='[TransactionService] %(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logger = logging.getLogger("transaction_verification")
 
 # --- CONFIGURATION ---
 MY_INDEX = 1 # [fraud=0, transaction=1, suggestions=2]
@@ -41,7 +53,7 @@ class TransactionVerificationService(pb_grpc.TransactionVerificationServiceServi
             "data": request,
             "vc": [0] * NUM_SERVICES
         }
-        logger.info(f"[OrderID: {request.order_id}] Initialized in cache.")
+        logger.debug(f"[OrderID: {request.order_id}] Initialized in cache.")
         return pb.InitOrderResponse(success=True)
 
     def VerifyItems(self, request, context):
@@ -52,9 +64,9 @@ class TransactionVerificationService(pb_grpc.TransactionVerificationServiceServi
 
         entry = orders_cache[order_id]
         entry["vc"] = merge_and_increment(entry["vc"], list(request.vector_clock))
-        
+
         is_valid = entry["data"].itemsCount > 0
-        logger.info(f"[OrderID: {order_id}] Event (a) - VC: {entry['vc']}")
+        logger.debug(f"[OrderID: {order_id}] Event (a) - VC: {entry['vc']}")
         return pb.VerifyResponse(is_valid=is_valid, message="Items OK", vector_clock=entry["vc"])
 
     def VerifyUserData(self, request, context):
@@ -65,12 +77,12 @@ class TransactionVerificationService(pb_grpc.TransactionVerificationServiceServi
 
         entry = orders_cache[order_id]
         entry["vc"] = merge_and_increment(entry["vc"], list(request.vector_clock))
-        
+
         # Logique de vérification simplifiée
         data = entry["data"]
         is_valid = bool(data.name.strip() and "@" in data.contact)
-        
-        logger.info(f"[OrderID: {order_id}] Event (b) - VC: {entry['vc']}")
+
+        logger.debug(f"[OrderID: {order_id}] Event (b) - VC: {entry['vc']}")
         return pb.VerifyResponse(is_valid=is_valid, message="User Data OK", vector_clock=entry["vc"])
 
     def VerifyCreditCard(self, request, context):
@@ -81,11 +93,11 @@ class TransactionVerificationService(pb_grpc.TransactionVerificationServiceServi
 
         entry = orders_cache[order_id]
         entry["vc"] = merge_and_increment(entry["vc"], list(request.vector_clock))
-        
+
         card = entry["data"].creditCard.replace(" ", "")
         is_valid = len(card) >= 13 and entry["data"].cvv.isdigit()
 
-        logger.info(f"[OrderID: {order_id}] Event (c) - VC: {entry['vc']}")
+        logger.debug(f"[OrderID: {order_id}] Event (c) - VC: {entry['vc']}")
         return pb.VerifyResponse(is_valid=is_valid, message="Card OK", vector_clock=entry["vc"])
 
 def serve():

@@ -4,6 +4,18 @@ import grpc
 import logging
 from concurrent import futures
 
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.grpc import GrpcInstrumentorServer
+
+# Setup OpenTelemetry
+trace.set_tracer_provider(TracerProvider())
+span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+trace.get_tracer_provider().add_span_processor(span_processor)
+GrpcInstrumentorServer().instrument()
+
 FILE = __file__ if '__file__' in dir() else os.getenv('PYTHONSTARTUP', '')
 sys.path.insert(0, os.path.join(os.path.dirname(FILE), '../../utils/pb/suggestions'))
 
@@ -11,11 +23,8 @@ import suggestions_pb2
 import suggestions_pb2_grpc
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='[SuggestionsService] %(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logger = logging.getLogger("suggestions")
 
 # Static book catalog
 BOOK_CATALOG = [
@@ -58,7 +67,7 @@ class SuggestionsServicer(suggestions_pb2_grpc.SuggestionsServiceServicer):
             "ordered_items": list(request.ordered_items),
             "vc": [0] * NUM_SERVICES
         }
-        logger.info(f"[OrderID: {request.order_id}] Order initialized. "
+        logger.debug(f"[OrderID: {request.order_id}] Order initialized. "
                     f"VC: {orders[request.order_id]['vc']}")
         return suggestions_pb2.InitResponse(success=True)
 
@@ -71,7 +80,7 @@ class SuggestionsServicer(suggestions_pb2_grpc.SuggestionsServiceServicer):
         order_id = request.order_id
         incoming_vc = list(request.vector_clock)
 
-        logger.info(f"[OrderID: {order_id}] Event f triggered. "
+        logger.debug(f"[OrderID: {order_id}] Event f triggered. "
                     f"Incoming VC: {incoming_vc}")
 
         # Check order exists in cache
@@ -86,7 +95,7 @@ class SuggestionsServicer(suggestions_pb2_grpc.SuggestionsServiceServicer):
 
         # Merge incoming VC with local, then increment our slot
         entry["vc"] = merge_and_increment(entry["vc"], incoming_vc)
-        logger.info(f"[OrderID: {order_id}] Event f - GetSuggestions. "
+        logger.debug(f"[OrderID: {order_id}] Event f - GetSuggestions. "
                     f"Updated VC: {entry['vc']}")
 
         # Filter out books already being ordered
@@ -99,7 +108,7 @@ class SuggestionsServicer(suggestions_pb2_grpc.SuggestionsServiceServicer):
         # Return top 3 suggestions
         suggestions = available[:3]
 
-        logger.info(f"[OrderID: {order_id}] Returning {len(suggestions)} suggestions: "
+        logger.debug(f"[OrderID: {order_id}] Returning {len(suggestions)} suggestions: "
                     f"{[b['title'] for b in suggestions]}")
 
         return suggestions_pb2.SuggestionResponse(

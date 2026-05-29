@@ -1,4 +1,7 @@
-grpcio==1.70.0
-grpcio-tools==1.70.0
-protobuf==5.29.6
+grpcio
+grpcio-tools
 watchdog
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-grpc
